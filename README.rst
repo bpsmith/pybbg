@@ -6,7 +6,7 @@ Python interface to Bloomberg COM APIs
 Implemented Features
 ====================
 
-The bloomberg requests implemented are as following: 
+The following Bloomberg requests are implemented: 
 
     - HistoricalDataReqest
     - ReferenceDataRequest
