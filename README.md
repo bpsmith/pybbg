@@ -15,6 +15,6 @@ The bloomberg requests implemented are as following:
 Dependencies
 ============
 
-    * `Pandas <https://github.com/wesm/pandas>`__
-    * `Python Win32 Extensions <http://starship.python.net/~skippy/win32/Downloads.html>`__
+    * `Pandas <https://github.com/wesm/pandas>`__: incredible framework
+    * `Python Win32 Extensions <http://starship.python.net/~skippy/win32/Downloads.html>`__: For Windows COM interface
 
