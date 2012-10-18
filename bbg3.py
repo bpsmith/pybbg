@@ -5,435 +5,524 @@ Written by Brian P. Smith (brian.p.smith@gmail.com)
 """
 from pythoncom import PumpWaitingMessages
 from win32com.client import DispatchWithEvents, constants, CastTo
-from collections import defaultdict, OrderedDict
-from datetime import datetime
-import pandas
+from collections import defaultdict, OrderedDict, namedtuple
+from datetime import datetime, timedelta
+from pandas import DataFrame, to_datetime, concat
 import numpy as np
 import pywintypes
 
-
-def _convert_value(v):
-    """ Convert the Bloomberg COM value to a python type """
-    if isinstance(v, pywintypes.TimeType):
-        return datetime(year=v.year, month=v.month, day=v.day, hour=v.hour, minute=v.minute, second=v.second)
-    elif isinstance(v, basestring):
-        if v.startswith('#N/A'):
-            return np.nan
-        return str(v)
-    else:
-        return v
+SecurityErrorAttrs = ['security', 'source', 'code', 'category', 'message', 'subcategory']
+SecurityError = namedtuple('SecurityError', SecurityErrorAttrs)
+FieldErrorAttrs = ['security', 'field', 'source', 'code', 'category', 'message', 'subcategory']
+FieldError = namedtuple('FieldError', FieldErrorAttrs)
 
 
-def _get_value(element, name):
-    if element.HasElement(name):
-        v = element.GetElement(name).Value
-        return _convert_value(v)
-    else:
-        return np.nan
+class BbgHelper(object):
 
+    @staticmethod
+    def security_iter(nodearr, do_print=0):
+        """ provide a security data iterator by returning a tuple of (Element, SecurityError) which are mutually exclusive """
+        assert nodearr.Name == 'securityData' and nodearr.IsArray
+        for i in range(nodearr.NumValues):
+            node = nodearr.GetValue(i)
+            err = BbgHelper.get_security_error(node)
+            result = (None, err) if err else (node, None)
+            yield result
 
-def _read_table(element):
-    """ Transform the fieldData child for a bulk data element to a frame """
-    cols = None
-    data = []
-    for i in range(element.NumValues):
-        row = element.GetValue(i)
-        if cols is None:
-            cols = [ row.GetElement(_).Name for _ in range(row.NumElements) ]
-        data.append( [ _convert_value( row.GetElement(_).Value ) for _ in range(row.NumElements) ] )
-    if cols:
-        cdata = zip(*data)
-        return pandas.DataFrame( dict( zip(cols, cdata) ), columns=cols)
-    else:
-        return None
+    @staticmethod
+    def message_iter(evt, do_print=0):
+        """ provide a message iterator which checks for a response error prior to returning """
+        iter = evt.CreateMessageIterator()
+        while iter.Next():
+            msg = iter.Message
+            if do_print:
+                print msg.Print
+            if msg.AsElement.HasElement('responseError'):
+                raise Exception(msg.AsElement.GetValue('message'))
+            yield msg
+
+    @staticmethod
+    def get_sequence_value(node):
+        """Convert an element with DataType Sequence to a DataFrame.
+        Note this may be a naive implementation as I assume that bulk data is always a table
+        """
+        assert node.Datatype == 15
+        data = defaultdict(list)
+        cols = []
+        for i in range(node.NumValues):
+            row = node.GetValue(i)
+            if i == 0: # Get the ordered cols and assume they are constant
+                cols = [ str(row.GetElement(_).Name) for _ in range(row.NumElements) ]
+
+            for cidx in range(row.NumElements):
+                col = row.GetElement(cidx)
+                data[str(col.Name)].append( BbgHelper.as_value(col) )
+        return DataFrame(data, columns=cols)
+
+    @staticmethod
+    def as_value(ele):
+        """ convert the specified element as a python value """
+        dtype = ele.Datatype
+        #print '%s = %s' % (ele.Name, dtype)
+        if dtype in (1,2,3,4,5,6,7,9,12):
+            # BOOL, CHAR, BYTE, INT32, INT64, FLOAT32, FLOAT64, BYTEARRAY, DECIMAL)
+            return ele.Value
+        elif dtype == 8: # String
+            return str(ele.Value)
+        elif dtype == 10: # Date
+            v = ele.Value
+            return datetime(year=v.year, month=v.month, day=v.day).date()
+        elif dtype == 11: # Time
+            v = ele.Value
+            return datetime(hour=v.hour, minute=v.minute, second=v.second).time()
+        elif dtype == 13: # Datetime
+            v = ele.Value
+            return datetime(year=v.year, month=v.month, day=v.day, hour=v.hour, minute=v.minute, second=v.second)
+        elif dtype == 14: # Enumeration
+            raise NotImplementError('ENUMERATION data type needs implemented')
+        elif dtype == 16: # Choice
+            raise NotImplementError('CHOICE data type needs implemented')
+        elif dtype == 15: # SEQUENCE
+            return BbgHelper.get_sequence_value(ele)
+        else:
+            raise NotImplementedError('Unexpected data type %s. Check documentation' % dtype)
+
+    @staticmethod
+    def get_child_value(parent, name):
+        """ return the value of the child element with name in the parent Element """
+        return BbgHelper.as_value( parent.GetElement(name) )
+
+    @staticmethod
+    def get_child_values(parent, names):
+        """ return a list of values for the specified child fields. If field not in Element then replace with nan. """
+        vals = []
+        for name in names:
+            if parent.HasElement(name):
+                vals.append( BbgHelper.as_value( parent.GetElement(name) ))
+            else:
+                vals.append(np.nan)
+        return vals
+
+    @staticmethod
+    def as_security_error(node, secid):
+        """ convert the securityError element to a SecurityError """
+        assert node.Name == 'securityError'
+        src = BbgHelper.get_child_value(node, 'source')
+        code = BbgHelper.get_child_value(node, 'code')
+        cat = BbgHelper.get_child_value(node, 'category')
+        msg = BbgHelper.get_child_value(node, 'message')
+        subcat = BbgHelper.get_child_value(node, 'subcategory')
+        return SecurityError(security=secid, source=src, code=code, category=cat, message=msg, subcategory=subcat)
+
+    @staticmethod
+    def as_field_error(node, secid):
+        """ convert a fieldExceptions element to a FieldError or FieldError array """
+        assert node.Name == 'fieldExceptions'
+        if node.IsArray:
+            return [ BbgHelper.as_field_error(node.GetValue(_), secid) for _ in range(node.NumValues) ]
+        else:
+            fld = BbgHelper.get_child_value(node, 'fieldId')
+            info = node.GetElement('errorInfo')
+            src = BbgHelper.get_child_value(info, 'source')
+            code = BbgHelper.get_child_value(info, 'code')
+            cat = BbgHelper.get_child_value(info, 'category')
+            msg = BbgHelper.get_child_value(info, 'message')
+            subcat = BbgHelper.get_child_value(info, 'subcategory')
+            return FieldError(security=secid, field=fld, source=src, code=code, category=cat, message=msg, subcategory=subcat)
+
+    @staticmethod
+    def get_security_error(node):
+        """ return a SecurityError if the specified securityData element has one, else return None """
+        assert node.Name == 'securityData' and not node.IsArray
+        if node.HasElement('securityError'):
+            secid = BbgHelper.get_child_value(node, 'security')
+            err = BbgHelper.as_security_error(node.GetElement('securityError'), secid)
+            return err
+        else:
+            return None
+
+    @staticmethod
+    def get_field_errors(node):
+        """ return a list of FieldErrors if the specified securityData element has field errors """
+        assert node.Name == 'securityData' and not node.IsArray
+        nodearr = node.GetElement('fieldExceptions')
+        if nodearr.NumValues > 0:
+            secid = BbgHelper.get_child_value(node, 'security')
+            errors = BbgHelper.as_field_error(nodearr, secid)
+            return errors
+        else:
+            return None
 
 
 class ResponseHandler(object):
+
+    def do_init(self, handler):
+        """ will be called prior to waiting for the message """
+        self.waiting = True
+        self.exc_info = None
+        self.handler = handler
+
+    def set_evt_handler(self, handler):
+        self.handler = handler
+
     def OnProcessEvent(self, evt):
         try:
             evt = CastTo(evt, 'Event')
             if evt.EventType == constants.RESPONSE:
-                self.process_event(evt)
+                self.handler.on_event(evt, is_final=True)
                 self.waiting = False
             elif evt.EventType == constants.PARTIAL_RESPONSE:
-                self.process_event(evt)
+                self.handler.on_event(evt, is_final=False)
             else:
-                self.process_admin_event(evt)
+                self.handler.on_admin_event(evt)
         except Exception, e:
             import sys
             self.waiting = False
             self.exc_info = sys.exc_info()
             raise
 
-    def process_event(self, evt):
+    @property
+    def has_deferred_exception(self):
+        return self.exc_info is not None
+
+    def raise_deferred_exception(self):
+        raise self.exc_info[1], None, self.exc_info[2]
+
+    def do_cleanup(self):
+        self.waiting = False
+        self.exc_info = None
+        self.handler = None
+
+
+class BbgRequest(object):
+    def __init__(self, ignore_security_error=0, ignore_field_error=0):
+        self.field_errors = []
+        self.security_errors = []
+        self.ignore_security_error = ignore_security_error
+        self.ignore_field_error = ignore_field_error
+
+    @property
+    def has_exception(self):
+        if not self.ignore_security_error and len(self.security_errors) > 0:
+            return True
+        if not self.ignore_field_error and len(self.field_errors) > 0:
+            return True
+
+    def raise_exception(self):
+        if not self.ignore_security_error and len(self.security_errors) > 0:
+            msgs = ['(%s, %s, %s)' % (s.security, s.category, s.message) for s in self.security_errors]
+            raise Exception('SecurityError: %s' % ','.join(msgs))
+        if not self.ignore_field_error and len(self.field_errors) > 0:
+            msgs = ['(%s, %s, %s, %s)' % (s.security, s.field, s.category, s.message) for s in self.field_errors]
+            raise Exception('FieldError: %s' % ','.join(msgs))
+        raise Exception('Programmer Error: No exception to raise')
+
+    def get_bbg_request(self, svc, session):
         raise NotImplementedError()
 
-    def process_admin_event(self, evt):
+    def get_bbg_service_name(self):
+        raise NotImplementedError()
+
+    def on_event(self, evt, is_final):
+        raise NotImplementedError()
+
+    def on_admin_event(self, evt):
         pass
 
-    def verify_security_response(self, sd):
-        """ check to see if the securityData element has exceptions related to security request or field data requests """
-        if sd.HasElement('securityError'):
-            ecat = sd.GetElement('securityError').GetElement('category').Value
-            emsg = sd.GetElement('securityError').GetElement('message').Value
-            raise Exception('SecurityError: %s - %s: %s' % (sd.GetElement('security').Value, ecat, emsg))
-        elif sd.HasElement('fieldExceptions') and sd.GetElement('fieldExceptions').NumValues:
-            fldexarr = sd.GetElement('fieldExceptions')
-            bfr = []
-            for i in range(fldexarr.NumValues):
-                fldex = fldexarr.GetValue(i)
-                fldid = fldex.GetElement('fieldId').Value
-                ecat = fldex.GetElement('errorInfo').GetElement('category').Value
-                emsg = fldex.GetElement('errorInfo').GetElement('message').Value
-                bfr.append('FieldError: %s - %s: %s' % (fldid, ecat, emsg))
-            raise Exception('\n'.join(bfr))
+    def execute(self):
+        BbgTerminal.execute_request(self)
+        return self
+
+    @staticmethod
+    def apply_overrides(request, omap):
+        """ add the given overrides (omap) to bloomberg request """
+        if omap:
+            for k, v in omap.iteritems():
+                o = request.GetElement('overrides').AppendElment()
+                o.SetElement('fieldId', k)
+                o.SetElement('value', v)
 
 
-class ReferenceDataResponseHandler(ResponseHandler):
+class BbgReferenceDataRequest(BbgRequest):
 
-    def process_event(self, evt):
-        iter = evt.CreateMessageIterator()
-        while iter.Next():
-            msg = iter.Message
-            #print msg.Print
-            if msg.AsElement.HasElement('responseError'):
-                raise Exception(msg.AsElement.GetValue('message'))
+    def __init__(self, symbols, fields, overrides=None, response_type='frame', ignore_security_error=0, ignore_field_error=0):
+        """
+        response_type: (frame, map) how to return the results
+        """
+        assert response_type in ('frame', 'map')
+        BbgRequest.__init__(self, ignore_security_error=ignore_security_error, ignore_field_error=ignore_field_error)
+        self.symbols = isinstance(symbols, basestring) and [symbols] or symbols
+        self.fields = isinstance(fields, basestring) and [fields] or fields
+        self.overrides = overrides
+        # response related
+        self.response = {} if response_type == 'map' else defaultdict(list)
+        self.response_type = response_type
 
-            sdarray = msg.GetElement('securityData')
-            for i in range(sdarray.NumValues):
-                sd = sdarray.GetValue(i)
-                self.verify_security_response(sd)
-                secid, fd = sd.GetElement('security').Value, sd.GetElement('fieldData')
-                self.results['security'].append(secid)
-                [ self.results[f].append( _get_value(fd, f) ) for f in self.fields]
+    def get_bbg_service_name(self):
+        return '//blp/refdata'
+
+    def get_bbg_request(self, svc, session):
+        # create the bloomberg request object
+        request = svc.CreateRequest('ReferenceDataRequest')
+        [ request.GetElement('securities').AppendValue(sec) for sec in self.symbols ]
+        [ request.GetElement('fields').AppendValue(fld) for fld in self.fields ]
+        BbgRequest.apply_overrides(request, self.overrides)
+        return request
+
+    def on_security_node(self, node):
+        sid = BbgHelper.get_child_value(node, 'security')
+        farr = node.GetElement('fieldData')
+        fdata = BbgHelper.get_child_values(farr, self.fields)
+        assert len(fdata) == len(self.fields), 'field length must match data length'
+        if self.response_type == 'map':
+            self.response[sid] = fdata
+        else:
+            self.response['security'].append(sid)
+            [ self.response[f].append(d) for f, d in zip(self.fields, fdata) ]
+        # Add any field errors if
+        ferrors = BbgHelper.get_field_errors(node)
+        ferrors and self.field_errors.extend(ferrors)
+
+    def on_event(self, evt, is_final):
+        """ this is invoked from in response to COM PumpWaitingMessages - different thread """
+        for msg in BbgHelper.message_iter(evt):
+            for node, error in BbgHelper.security_iter( msg.GetElement('securityData') ):
+                if error:
+                    self.security_errors.append(error)
+                else:
+                    self.on_security_node(node)
+
+        if is_final and self.response_type == 'frame':
+            index = self.response.pop('security')
+            frame = DataFrame(self.response, columns=self.fields, index=index)
+            frame.index.name = 'security'
+            self.response = frame
 
 
-class HistoricalResponseHandler(ResponseHandler):
+class BbgHistoricalDataRequest(BbgRequest):
 
-    def process_event(self, evt):
-        iter = evt.CreateMessageIterator()
-        while iter.Next():
-            msg = iter.Message
-            if msg.AsElement.HasElement('responseError'):
-                raise Exception(msg.AsElement.GetValue('message'))
+    def __init__(self, symbols, fields, start=None, end=None, period='DAILY', addtl_sets=None, ignore_security_error=0, ignore_field_error=0):
+        """Historical data request for bloomberg.
 
-            sd = msg.GetElement('securityData')
-            self.verify_security_response(sd)
-            secid, fd = sd.GetElement('security').Value, sd.GetElement('fieldData')
-            dmap = defaultdict(list)
-            for j in range(fd.NumValues):
-                period = fd.GetValue(j)
-                dmap['date'].append( _get_value(period, 'date') )
-                [ dmap[f].append( _get_value(period, f) ) for f in self.fields ]
+        Parameters
+        ----------
+        symbols : string or list
+        fields : string or list
+        start : start date (if None then use 1 year ago)
+        end : end date (if None then use today)
+        period : ('DAILY', 'WEEKLY', 'MONTHLY', 'QUARTERLY', 'SEMI-ANNUAL', 'YEARLY')
+        ignore_field_errors : bool
+        ignore_security_errors : bool
+        """
+        BbgRequest.__init__(self, ignore_security_error=ignore_security_error, ignore_field_error=ignore_field_error)
+        assert period in ('DAILY', 'WEEKLY', 'MONTHLY', 'QUARTERLY', 'SEMI-ANNUAL', 'YEARLY')
+        self.symbols = isinstance(symbols, basestring) and [symbols] or symbols
+        self.fields = isinstance(fields, basestring) and [fields] or fields
+        if start is None:
+            start = datetime.today() - timedelta(365)
+        if end is None:
+            end = datetime.today()
+        self.start = to_datetime(start)
+        self.end = to_datetime(end)
+        self.period = period
+        # response related
+        self.response = {}
 
-            idx = dmap.pop('date')
-            frame = pandas.DataFrame(dmap, columns=self.fields, index=idx)
-            frame.index.name = 'date'
-            self.results[secid] = frame
+    def get_bbg_service_name(self):
+        return '//blp/refdata'
+
+    def get_bbg_request(self, svc, session):
+        # create the bloomberg request object
+        request = svc.CreateRequest('HistoricalDataRequest')
+        [ request.GetElement('securities').AppendValue(sec) for sec in self.symbols ]
+        [ request.GetElement('fields').AppendValue(fld) for fld in self.fields ]
+        request.Set('startDate', self.start.strftime('%Y%m%d'))
+        request.Set('endDate', self.end.strftime('%Y%m%d'))
+        request.Set('periodicitySelection', self.period)
+        return request
+
+    def on_security_data_node(self, node):
+        """process a securityData node - FIXME: currently not handling relateDate node """
+        sid = BbgHelper.get_child_value(node, 'security')
+        farr = node.GetElement('fieldData')
+        dmap = defaultdict(list)
+        for i in range(farr.NumValues):
+            pt = farr.GetValue(i)
+            [ dmap[f].append(BbgHelper.get_child_value(pt, f)) for f in ['date'] + self.fields]
+        idx = dmap.pop('date')
+        frame = DataFrame(dmap, columns=self.fields, index=idx)
+        frame.index.name = 'date'
+        self.response[sid] = frame
+
+    def on_event(self, evt, is_final):
+        """ this is invoked from in response to COM PumpWaitingMessages - different thread """
+        response = self.response
+        for msg in BbgHelper.message_iter(evt):
+            # Single security element in historical request
+            node = msg.GetElement('securityData')
+            if node.HasElement('securityError'):
+                self.security_errors.append( BbgHelper.as_security_error(node.GetElement('securityError') ))
+            else:
+                self.on_security_data_node(node)
+
+    def response_as_single(self, copy=0):
+        """ convert the response map to a single data frame with Multi-Index columns """
+        arr = []
+        for sid, frame in self.response.iteritems():
+            if copy:
+                frame = frame.copy()
+            'security' not in frame and frame.insert(0, 'security', sid)
+            arr.append( frame.reset_index().set_index(['date', 'security']) )
+        return concat(arr).unstack()
 
 
-class IntradayBarResponseHandler(ResponseHandler):
+class BbgIntrdayBarRequest(BbgRequest):
 
-    def process_event(self, evt):
-        iter = evt.CreateMessageIterator()
-        while iter.Next():
-            msg = iter.Message
-            #print msg.Print
-            if msg.AsElement.HasElement('responseError'):
-                raise Exception(msg.AsElement.GetValue('message'))
+    def __init__(self, symbol, interval, start=None, end=None, event='TRADE'):
+        """Intraday bar request for bloomberg
 
+        Parameters
+        ----------
+        symbols : string
+        interval : number of minutes
+        start : start date
+        end : end date (if None then use today)
+        event : (TRADE,BID,ASK,BEST_BID,BEST_ASK)
+        """
+        BbgRequest.__init__(self)
+        assert event in ('TRADE', 'BID', 'ASK', 'BEST_BID', 'BEST_ASK')
+        assert isinstance(symbol, basestring)
+        if start is None:
+            start = datetime.today() - timedelta(30)
+        if end is None:
+            end = datetime.today()
+
+        self.symbol = symbol
+        self.interval = interval
+        self.start = to_datetime(start)
+        self.end = to_datetime(end)
+        self.event = event
+        # response related
+        self.response = defaultdict(list)
+
+    def get_bbg_service_name(self):
+        return '//blp/refdata'
+
+    def get_bbg_request(self, svc, session):
+        # create the bloomberg request object
+        start, end = self.start, self.end
+        request = svc.CreateRequest('IntradayBarRequest')
+        request.Set('security', self.symbol)
+        request.Set('interval', self.interval)
+        request.Set('eventType', self.event)
+        request.Set('startDateTime', session.CreateDatetime(start.year, start.month, start.day, start.hour, start.minute) )
+        request.Set('endDateTime', session.CreateDatetime(end.year, end.month, end.day, end.hour, end.minute) )
+        return request
+
+    def on_event(self, evt, is_final):
+        """ this is invoked from in response to COM PumpWaitingMessages - different thread """
+        response = self.response
+        for msg in BbgHelper.message_iter(evt):
             bars = msg.GetElement('barData').GetElement('barTickData')
-            r = self.results
             for i in range(bars.NumValues):
                 bar = bars.GetValue(i)
-                # time, open, high, low, close, volume
                 ts = bar.GetElement(0).Value
-                r['time'].append( datetime(ts.year, ts.month, ts.day, ts.hour, ts.minute) )
-                r['open'].append( bar.GetElement(1).Value )
-                r['high'].append( bar.GetElement(2).Value )
-                r['low'].append( bar.GetElement(3).Value )
-                r['close'].append( bar.GetElement(4).Value )
-                r['volume'].append( bar.GetElement(5).Value )
-                r['events'].append( bar.GetElement(6).Value )
+                response['time'].append( datetime(ts.year, ts.month, ts.day, ts.hour, ts.minute) )
+                response['open'].append( bar.GetElement(1).Value )
+                response['high'].append( bar.GetElement(2).Value )
+                response['low'].append( bar.GetElement(3).Value )
+                response['close'].append( bar.GetElement(4).Value )
+                response['volume'].append( bar.GetElement(5).Value )
+                response['events'].append( bar.GetElement(6).Value )
+
+        if is_final:
+            idx = response.pop('time')
+            self.response = DataFrame(response, columns=['open', 'high', 'low', 'close', 'volume', 'events'], index=idx)
 
 
-class BulkReferenceDataResponseHandler(ResponseHandler):
+class BbgTerminal(object):
+    @staticmethod
+    def execute_request(request):
+        session = DispatchWithEvents('blpapicom.ProviderSession.1', ResponseHandler)
+        session.Start()
+        try:
+            svcname = request.get_bbg_service_name()
+            if not session.OpenService(svcname):
+                raise Exception('failed to open service %s' % svcname)
 
-    def process_event(self, evt):
-        iter = evt.CreateMessageIterator()
-        while iter.Next():
-            msg = iter.Message
-            #print msg.Print
-            if msg.AsElement.HasElement('responseError'):
-                raise Exception(msg.AsElement.GetValue('message'))
-
-            sdarray = msg.GetElement('securityData')
-            for i in range(sdarray.NumValues):
-                sd = sdarray.GetValue(i)
-                self.verify_security_response(sd)
-                secid, fd = sd.GetElement('security').Value, sd.GetElement('fieldData')
-                for j in range(fd.NumValues):
-                    bulkfld = fd.GetElement(j)
-                    frame = _read_table(bulkfld)
-                    frame['security'] = secid
-                    if frame is not None:
-                        if self.results is None:
-                            self.results = frame
-                        else:
-                            self.results = pandas.concat([self.results, frame])
-
-
-def get_data_bbg_historical(symbols, flds, start=None, end=None, period='DAILY'):
-    """
-    Get historical data from bloomberg. Retrieve the flds for the specified start to end date for the given symbol. Currently
-    all results are returned with DatetimeIndex without a frequency being set.
-
-    symbols: Bloomberg identifier(s)
-    flds: list of bloomberg fields to retrieve
-    start: start date
-    end: end date
-    period: periodicity of data, either ('DAILY', 'WEEKLY', 'MONTHLY', 'QUARTERLY', 'SEMI-ANNUAL', 'YEARLY')
-    """
-    if isinstance(symbols, basestring):
-        symbols = [symbols]
-    elif not isinstance(symbols, (list, tuple)):
-        raise TypeError('symbols must be list or tuple')
-
-    if isinstance(flds, basestring):
-        flds = [flds]
-
-    from pandas.io.data import _sanitize_dates
-    start, end = _sanitize_dates(start, end)
-
-    session = DispatchWithEvents('blpapicom.ProviderSession.1', HistoricalResponseHandler)
-    session.Start()
-    if not session.OpenService('//blp/refdata'):
-        raise Exception('failed to open service')
-
-    rfd = session.GetService('//blp/refdata')
-    request = rfd.CreateRequest('HistoricalDataRequest')
-
-    # configure historical request
-    [ request.GetElement('securities').AppendValue(s) for s in symbols ]
-    [ request.GetElement('fields').AppendValue(fld) for fld in flds ]
-    request.Set('startDate', start.strftime('%Y%m%d'))
-    request.Set('endDate', end.strftime('%Y%m%d'))
-    request.Set('periodicitySelection', period)
-
-    # event loop
-    cid = session.SendRequest(request)
-    session.exc_info = None
-    session.waiting = True
-    session.fields = flds
-    session.results = defaultdict(list)
-
-    while session.waiting:
-        PumpWaitingMessages()
-    session.Stop()
-
-    if session.exc_info is not None:
-        raise session.exc_info[1], None, session.exc_info[2]
-    else:
-        data = OrderedDict()
-        idx = None
-
-        if True:
-            # Return the frame with security as column
-            frames = []
-            for k, v in session.results.iteritems():
-                v = v.reset_index()
-                v.insert(1, 'security', k)
-                frames.append(v)
-            result = pandas.concat(frames, ignore_index=1)
-            result = result.set_index(['date', 'security'])
-            return result
-        else:
-            # Return the frame with security as a column header
-            for secid in symbols:
-                frame = session.results[secid]
-                [ data.setdefault( (secid, s.name), s) for k,s in frame.iteritems() ]
-                if idx is None:
-                    idx = frame.index
-                else:
-                    idx = idx.union(idx)
-            return pandas.DataFrame(data, index=idx, columns=pandas.MultiIndex.from_tuples(data.keys(), names=['security', 'fields']))
-
-
-def get_data_bbg_live(symbols, flds, replace_na=True, overrides=None):
-    """
-    Get the live data for the specified fields from Bloomberg. if replace_na is true then convert all #N/As to numpy NaN's.
-
-    symbols: Bloomberg identifier(s)
-    flds: list of bloomberg fields to retrieve
-    overrides - map of bloomberg key and the override value
-    """
-    if isinstance(symbols, basestring):
-        symbols = [symbols]
-    elif not isinstance(symbols, (list, tuple)):
-        raise TypeError('symbols must be list or tuple')
-
-    if isinstance(flds, basestring):
-        flds = [flds]
-
-    session = DispatchWithEvents('blpapicom.ProviderSession.1', ReferenceDataResponseHandler)
-    session.Start()
-    if not session.OpenService('//blp/refdata'):
-        raise Exception('failed to open service')
-
-    rfd = session.GetService('//blp/refdata')
-    request = rfd.CreateRequest('ReferenceDataRequest')
-
-    # configure reference data request
-    [ request.GetElement('securities').AppendValue(s) for s in symbols ]
-    [ request.GetElement('fields').AppendValue(fld) for fld in flds ]
-    if overrides:
-        for k, v in overrides.iteritems():
-            o = request.GetElement('overrides').AppendElment()
-            o.SetElement('fieldId', k)
-            o.SetElement('value', v)
-
-    # event loop
-    cid = session.SendRequest(request)
-    session.exc_info = None
-    session.waiting = True
-    session.fields = flds
-    session.results = defaultdict(list)
-
-    while session.waiting:
-        PumpWaitingMessages()
-    session.Stop()
-
-    if session.exc_info is not None:
-        raise session.exc_info[1], None, session.exc_info[2]
-    else:
-        idx = session.results.pop('security')
-        return pandas.DataFrame( session.results, columns=flds, index=idx)
-
-
-def get_data_bbg_intraday_bar(symbol, interval, start, end=None, event='TRADE'):
-    """
-    Retrieve the summary intervals for intraday data covering five event types.
-
-    Parameters
-    ----------
-    symbol : Bloomberg identifier
-    interval : bar interval in minutes
-    start : start datetime
-    end : end datetime
-    event : event type to request (TRADE,BID,ASK,BEST_BID,BEST_ASK)
-
-    Returns:
-    df: DataFrame with columns for timestamp, open, high, low, close, volume, events
-
-    """
-    assert isinstance(symbol, basestring), 'get_data_bbg_intraday_bar accepts only a single security'
-    end = end or datetime.now()
-    session = DispatchWithEvents('blpapicom.ProviderSession.1', IntradayBarResponseHandler)
-    session.Start()
-    if not session.OpenService('//blp/refdata'):
-        raise Exception('failed to open service')
-
-    rfd = session.GetService('//blp/refdata')
-    request = rfd.CreateRequest('IntradayBarRequest')
-    # configure reference data request
-    request.Set('security', symbol)
-    request.Set('interval', interval)
-    request.Set('eventType', event)
-    request.Set('startDateTime', session.CreateDatetime(start.year, start.month, start.day, start.hour, start.minute) )
-    request.Set('endDateTime', session.CreateDatetime(end.year, end.month, end.day, end.hour, end.minute) )
-
-    # event loop
-    cid = session.SendRequest(request)
-    session.exc_info = None
-    session.waiting = True
-    session.event = event
-    session.results = defaultdict(list)
-
-    while session.waiting:
-        PumpWaitingMessages()
-    session.Stop()
-
-    if session.exc_info is not None:
-        raise session.exc_info[1], None, session.exc_info[2]
-    else:
-        idx = session.results.pop('time')
-        return pandas.DataFrame( session.results, columns=['open', 'high', 'low', 'close', 'volume', 'events'], index=idx)
-
-
-def get_data_bbg_bulk(symbols, fld, overrides=None):
-    """
-    Special method to receive 'bulk' data items. (item which has results returned in a table). This method will read the table and return it as a data frame.
-
-    Parameters:
-    symbols - bloomberg security identifier(s)
-    fld - bloomberg bulk field
-    overrides - dict of bloomberg overrides
-    """
-    if isinstance(symbols, basestring):
-        symbols = [symbols]
-    elif not isinstance(symbols, (list, tuple)):
-        raise TypeError('symbols must be list or tuple')
-
-    assert isinstance(fld, basestring), 'must specify a single bulk field'
-
-    session = DispatchWithEvents('blpapicom.ProviderSession.1', BulkReferenceDataResponseHandler)
-    session.Start()
-    if not session.OpenService('//blp/refdata'):
-        raise Exception('failed to open service')
-
-    rfd = session.GetService('//blp/refdata')
-    request = rfd.CreateRequest('ReferenceDataRequest')
-
-    # configure reference data request
-    [ request.GetElement('securities').AppendValue(s) for s in symbols ]
-    request.GetElement('fields').AppendValue(fld)
-    if overrides:
-        for k, v in overrides.iteritems():
-            o = request.GetElement('overrides').AppendElment()
-            o.SetElement('fieldId', k)
-            o.SetElement('value', v)
-
-    # event loop
-    cid = session.SendRequest(request)
-    session.exc_info = None
-    session.waiting = True
-    session.fields = [ fld ]
-    session.results = None
-
-    while session.waiting:
-        PumpWaitingMessages()
-    session.Stop()
-
-    if session.exc_info is not None:
-        raise session.exc_info[1], None, session.exc_info[2]
-    else:
-        return session.results
+            svc = session.GetService(svcname)
+            asbbg = request.get_bbg_request(svc, session)
+            cid = session.SendRequest(asbbg)
+            session.do_init(request)
+            while session.waiting:
+                PumpWaitingMessages()
+            session.has_deferred_exception and session.raise_deferred_exception()
+            request.has_exception and request.raise_exception()
+            return request
+        finally:
+            session.Stop()
+            session.do_cleanup()
 
 
 if __name__ == '__main__':
     # 5 days ago
-    d = pandas.datetools.BDay(-5).apply(datetime.now())
-    m = pandas.datetools.BMonthBegin(-3).apply(datetime.now())
+    import pandas
+    d = pandas.datetools.BDay(-4).apply(datetime.now())
+    m = pandas.datetools.BMonthBegin(-2).apply(datetime.now())
 
-    # Retrieve reference data
-    securities = ['IBM US EQUITY', 'VOD LN EQUITY', 'DELL US EQUITY']
-    fields = ['NAME', 'PX_LAST', 'EQY_WEIGHTED_AVG_PX', 'CRNCY', 'PRICING_SOURCE']
-    print get_data_bbg_live(securities, fields)
+    def banner(msg):
+        print '*' * 25
+        print msg
+        print '*' * 25
 
-    # Retrieve reference data with overrides
-    overrides = {'VWAP_START_DT' : d.strftime('%Y%m%d'), 'VWAP_END_DT' : d.strftime('%Y%m%d'), 'VWAP_START_TIME' : '9:30', 'VWAP_END_TIME' : '10:30'}
-    print get_data_bbg_live(securities, fields, overrides=overrides)
 
-    # Retrieve bulk data field
-    print get_data_bbg_bulk('csco us equity', 'EQY_DVD_HIST') # single security
-    print get_data_bbg_bulk(['msft us equity', 'csco us equity'], 'BDVD_PR_EX_DTS_DVD_AMTS_W_ANN') # multi-security
-    print get_data_bbg_bulk('eurusd curncy', 'DFLT_VOL_SURF_MID')  # vol surface
-    print get_data_bbg_bulk('eurusd curncy', 'FWD_CURVE')  # fx forward curve
+    banner('ReferenceDataRequest: single security, single field, frame response')
+    req = BbgReferenceDataRequest('msft us equity', 'px_last', response_type='frame')
+    print req.execute().response
 
-    # Retrive historical data
-    print get_data_bbg_historical(['msft us equity', 'intc us equity'], ['px_last', 'px_open'], start=d)
-    print get_data_bbg_historical(['msft us equity', 'intc us equity'], ['px_last', 'px_open'], start=m, period='WEEKLY')
+    banner('ReferenceDataRequest: single security, single field, map response')
+    req = BbgReferenceDataRequest('msft us equity', 'px_last', response_type='map')
+    print req.execute().response
 
-    # Retrive 60 minute intraday bar data
-    print get_data_bbg_intraday_bar('msft us equity', 60, start=d)
+    banner('ReferenceDataRequest: multi-security, multi-field')
+    req = BbgReferenceDataRequest(['eurusd curncy', 'msft us equity'], ['px_open', 'px_last'])
+    print req.execute().response
+
+    banner('ReferenceDataRequest: single security, multi-field (with bulk), frame response')
+    req = BbgReferenceDataRequest('eurusd curncy', ['px_last', 'fwd_curve'])
+    req.execute()
+    print req.response
+    # DataFrame within a DataFrame
+    print req.response.fwd_curve[0].tail()
+
+    banner('ReferenceDataRequest: multi security, multi-field, bad field')
+    req = BbgReferenceDataRequest(['eurusd curncy', 'msft us equity'], ['px_last', 'fwd_curve'], ignore_field_error=1)
+    req.execute()
+    print req.response
+
+    banner('HistoricalDataRequest: multi security, multi-field, daily data')
+    req = BbgHistoricalDataRequest(['eurusd curncy', 'msft us equity'], ['px_last', 'px_open'], start=d)
+    req.execute()
+    print req.response
+    print '--------- AS SINGLE TABLE ----------'
+    print req.response_as_single()
+
+    banner('HistoricalDataRequest: multi security, multi-field, weekly data')
+    req = BbgHistoricalDataRequest(['eurusd curncy', 'msft us equity'], ['px_last', 'px_open'], start=m, period='WEEKLY')
+    req.execute()
+    print req.response
+    print '--------- AS SINGLE TABLE ----------'
+    print req.response_as_single()
+
+    banner('IntrdayBarRequest: every hour')
+    req = BbgIntrdayBarRequest('eurusd curncy', 60, start=d)
+    req.execute()
+    print req.response
+
+    #
+    # HOW TO
+    #
+    # - Retrieve an fx vol surface:  BbgReferenceDataRequest('eurusd curncy', 'DFLT_VOL_SURF_MID')
+    # - Retrieve a fx forward curve:  BbgReferenceDataRequest('eurusd curncy', 'FWD_CURVE')
+    # - Retrieve dividends:  BbgReferenceDataRequest('csco us equity', 'BDVD_PR_EX_DTS_DVD_AMTS_W_ANN')
 
