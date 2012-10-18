@@ -1,12 +1,12 @@
 pybbg - python library to interface with Bloomberg COM API
 =====
 
-Python interface to Bloomberg COM APIs
+Python interface to Bloomberg Desktop APIs using COM
 
 Implemented Features
 ====================
 
-The bloomberg requests implemented are as following: 
+The bloomberg requests implemented are as following:
 
     - HistoricalDataReqest
     - ReferenceDataRequest
