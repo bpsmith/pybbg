@@ -1,7 +1,7 @@
 """
 Expose the Bloomberg Desktop API as an XML RPC server. Useful when running a virtual machine locally.
 """
-from bbg3 import BbgTerminal
+from bbg3 import Terminal
 from socket import gethostname
 from SimpleXMLRPCServer import SimpleXMLRPCServer
 from xmlrpclib import Binary, ServerProxy
@@ -16,7 +16,7 @@ def terminal_as_server(hostport=None):
     class BbgServer(object):
         def execute_request(self, brequest):
             request = pickle.loads(brequest.data)
-            response = BbgTerminal.execute_request(request)
+            response = Terminal.execute_request(request)
             return Binary(pickle.dumps(response))
     methods = BbgServer()
     hostport = hostport or (gethostname(), 3030)

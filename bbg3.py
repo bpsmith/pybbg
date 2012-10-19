@@ -17,7 +17,7 @@ FieldErrorAttrs = ['security', 'field', 'source', 'code', 'category', 'message',
 FieldError = namedtuple('FieldError', FieldErrorAttrs)
 
 
-class BbgHelper(object):
+class XmlHelper(object):
 
     @staticmethod
     def security_iter(nodearr, do_print=0):
@@ -25,7 +25,7 @@ class BbgHelper(object):
         assert nodearr.Name == 'securityData' and nodearr.IsArray
         for i in range(nodearr.NumValues):
             node = nodearr.GetValue(i)
-            err = BbgHelper.get_security_error(node)
+            err = XmlHelper.get_security_error(node)
             result = (None, err) if err else (node, None)
             yield result
 
@@ -56,7 +56,7 @@ class BbgHelper(object):
 
             for cidx in range(row.NumElements):
                 col = row.GetElement(cidx)
-                data[str(col.Name)].append( BbgHelper.as_value(col) )
+                data[str(col.Name)].append( XmlHelper.as_value(col) )
         return DataFrame(data, columns=cols)
 
     @staticmethod
@@ -83,14 +83,14 @@ class BbgHelper(object):
         elif dtype == 16: # Choice
             raise NotImplementError('CHOICE data type needs implemented')
         elif dtype == 15: # SEQUENCE
-            return BbgHelper.get_sequence_value(ele)
+            return XmlHelper.get_sequence_value(ele)
         else:
             raise NotImplementedError('Unexpected data type %s. Check documentation' % dtype)
 
     @staticmethod
     def get_child_value(parent, name):
         """ return the value of the child element with name in the parent Element """
-        return BbgHelper.as_value( parent.GetElement(name) )
+        return XmlHelper.as_value( parent.GetElement(name) )
 
     @staticmethod
     def get_child_values(parent, names):
@@ -98,7 +98,7 @@ class BbgHelper(object):
         vals = []
         for name in names:
             if parent.HasElement(name):
-                vals.append( BbgHelper.as_value( parent.GetElement(name) ))
+                vals.append( XmlHelper.as_value( parent.GetElement(name) ))
             else:
                 vals.append(np.nan)
         return vals
@@ -107,11 +107,11 @@ class BbgHelper(object):
     def as_security_error(node, secid):
         """ convert the securityError element to a SecurityError """
         assert node.Name == 'securityError'
-        src = BbgHelper.get_child_value(node, 'source')
-        code = BbgHelper.get_child_value(node, 'code')
-        cat = BbgHelper.get_child_value(node, 'category')
-        msg = BbgHelper.get_child_value(node, 'message')
-        subcat = BbgHelper.get_child_value(node, 'subcategory')
+        src = XmlHelper.get_child_value(node, 'source')
+        code = XmlHelper.get_child_value(node, 'code')
+        cat = XmlHelper.get_child_value(node, 'category')
+        msg = XmlHelper.get_child_value(node, 'message')
+        subcat = XmlHelper.get_child_value(node, 'subcategory')
         return SecurityError(security=secid, source=src, code=code, category=cat, message=msg, subcategory=subcat)
 
     @staticmethod
@@ -119,15 +119,15 @@ class BbgHelper(object):
         """ convert a fieldExceptions element to a FieldError or FieldError array """
         assert node.Name == 'fieldExceptions'
         if node.IsArray:
-            return [ BbgHelper.as_field_error(node.GetValue(_), secid) for _ in range(node.NumValues) ]
+            return [ XmlHelper.as_field_error(node.GetValue(_), secid) for _ in range(node.NumValues) ]
         else:
-            fld = BbgHelper.get_child_value(node, 'fieldId')
+            fld = XmlHelper.get_child_value(node, 'fieldId')
             info = node.GetElement('errorInfo')
-            src = BbgHelper.get_child_value(info, 'source')
-            code = BbgHelper.get_child_value(info, 'code')
-            cat = BbgHelper.get_child_value(info, 'category')
-            msg = BbgHelper.get_child_value(info, 'message')
-            subcat = BbgHelper.get_child_value(info, 'subcategory')
+            src = XmlHelper.get_child_value(info, 'source')
+            code = XmlHelper.get_child_value(info, 'code')
+            cat = XmlHelper.get_child_value(info, 'category')
+            msg = XmlHelper.get_child_value(info, 'message')
+            subcat = XmlHelper.get_child_value(info, 'subcategory')
             return FieldError(security=secid, field=fld, source=src, code=code, category=cat, message=msg, subcategory=subcat)
 
     @staticmethod
@@ -135,8 +135,8 @@ class BbgHelper(object):
         """ return a SecurityError if the specified securityData element has one, else return None """
         assert node.Name == 'securityData' and not node.IsArray
         if node.HasElement('securityError'):
-            secid = BbgHelper.get_child_value(node, 'security')
-            err = BbgHelper.as_security_error(node.GetElement('securityError'), secid)
+            secid = XmlHelper.get_child_value(node, 'security')
+            err = XmlHelper.as_security_error(node.GetElement('securityError'), secid)
             return err
         else:
             return None
@@ -147,8 +147,8 @@ class BbgHelper(object):
         assert node.Name == 'securityData' and not node.IsArray
         nodearr = node.GetElement('fieldExceptions')
         if nodearr.NumValues > 0:
-            secid = BbgHelper.get_child_value(node, 'security')
-            errors = BbgHelper.as_field_error(nodearr, secid)
+            secid = XmlHelper.get_child_value(node, 'security')
+            errors = XmlHelper.as_field_error(nodearr, secid)
             return errors
         else:
             return None
@@ -194,7 +194,7 @@ class ResponseHandler(object):
         self.handler = None
 
 
-class BbgRequest(object):
+class Request(object):
     def __init__(self, ignore_security_error=0, ignore_field_error=0):
         self.field_errors = []
         self.security_errors = []
@@ -230,7 +230,7 @@ class BbgRequest(object):
         pass
 
     def execute(self):
-        BbgTerminal.execute_request(self)
+        Terminal.execute_request(self)
         return self
 
     @staticmethod
@@ -243,14 +243,14 @@ class BbgRequest(object):
                 o.SetElement('value', v)
 
 
-class BbgReferenceDataRequest(BbgRequest):
+class ReferenceDataRequest(Request):
 
     def __init__(self, symbols, fields, overrides=None, response_type='frame', ignore_security_error=0, ignore_field_error=0):
         """
         response_type: (frame, map) how to return the results
         """
         assert response_type in ('frame', 'map')
-        BbgRequest.__init__(self, ignore_security_error=ignore_security_error, ignore_field_error=ignore_field_error)
+        Request.__init__(self, ignore_security_error=ignore_security_error, ignore_field_error=ignore_field_error)
         self.symbols = isinstance(symbols, basestring) and [symbols] or symbols
         self.fields = isinstance(fields, basestring) and [fields] or fields
         self.overrides = overrides
@@ -266,13 +266,13 @@ class BbgReferenceDataRequest(BbgRequest):
         request = svc.CreateRequest('ReferenceDataRequest')
         [ request.GetElement('securities').AppendValue(sec) for sec in self.symbols ]
         [ request.GetElement('fields').AppendValue(fld) for fld in self.fields ]
-        BbgRequest.apply_overrides(request, self.overrides)
+        Request.apply_overrides(request, self.overrides)
         return request
 
     def on_security_node(self, node):
-        sid = BbgHelper.get_child_value(node, 'security')
+        sid = XmlHelper.get_child_value(node, 'security')
         farr = node.GetElement('fieldData')
-        fdata = BbgHelper.get_child_values(farr, self.fields)
+        fdata = XmlHelper.get_child_values(farr, self.fields)
         assert len(fdata) == len(self.fields), 'field length must match data length'
         if self.response_type == 'map':
             self.response[sid] = fdata
@@ -280,13 +280,13 @@ class BbgReferenceDataRequest(BbgRequest):
             self.response['security'].append(sid)
             [ self.response[f].append(d) for f, d in zip(self.fields, fdata) ]
         # Add any field errors if
-        ferrors = BbgHelper.get_field_errors(node)
+        ferrors = XmlHelper.get_field_errors(node)
         ferrors and self.field_errors.extend(ferrors)
 
     def on_event(self, evt, is_final):
         """ this is invoked from in response to COM PumpWaitingMessages - different thread """
-        for msg in BbgHelper.message_iter(evt):
-            for node, error in BbgHelper.security_iter( msg.GetElement('securityData') ):
+        for msg in XmlHelper.message_iter(evt):
+            for node, error in XmlHelper.security_iter( msg.GetElement('securityData') ):
                 if error:
                     self.security_errors.append(error)
                 else:
@@ -299,7 +299,7 @@ class BbgReferenceDataRequest(BbgRequest):
             self.response = frame
 
 
-class BbgHistoricalDataRequest(BbgRequest):
+class HistoricalDataRequest(Request):
 
     def __init__(self, symbols, fields, start=None, end=None, period='DAILY', addtl_sets=None, ignore_security_error=0, ignore_field_error=0):
         """Historical data request for bloomberg.
@@ -314,7 +314,7 @@ class BbgHistoricalDataRequest(BbgRequest):
         ignore_field_errors : bool
         ignore_security_errors : bool
         """
-        BbgRequest.__init__(self, ignore_security_error=ignore_security_error, ignore_field_error=ignore_field_error)
+        Request.__init__(self, ignore_security_error=ignore_security_error, ignore_field_error=ignore_field_error)
         assert period in ('DAILY', 'WEEKLY', 'MONTHLY', 'QUARTERLY', 'SEMI-ANNUAL', 'YEARLY')
         self.symbols = isinstance(symbols, basestring) and [symbols] or symbols
         self.fields = isinstance(fields, basestring) and [fields] or fields
@@ -343,12 +343,12 @@ class BbgHistoricalDataRequest(BbgRequest):
 
     def on_security_data_node(self, node):
         """process a securityData node - FIXME: currently not handling relateDate node """
-        sid = BbgHelper.get_child_value(node, 'security')
+        sid = XmlHelper.get_child_value(node, 'security')
         farr = node.GetElement('fieldData')
         dmap = defaultdict(list)
         for i in range(farr.NumValues):
             pt = farr.GetValue(i)
-            [ dmap[f].append(BbgHelper.get_child_value(pt, f)) for f in ['date'] + self.fields]
+            [ dmap[f].append(XmlHelper.get_child_value(pt, f)) for f in ['date'] + self.fields]
         idx = dmap.pop('date')
         frame = DataFrame(dmap, columns=self.fields, index=idx)
         frame.index.name = 'date'
@@ -357,11 +357,11 @@ class BbgHistoricalDataRequest(BbgRequest):
     def on_event(self, evt, is_final):
         """ this is invoked from in response to COM PumpWaitingMessages - different thread """
         response = self.response
-        for msg in BbgHelper.message_iter(evt):
+        for msg in XmlHelper.message_iter(evt):
             # Single security element in historical request
             node = msg.GetElement('securityData')
             if node.HasElement('securityError'):
-                self.security_errors.append( BbgHelper.as_security_error(node.GetElement('securityError') ))
+                self.security_errors.append( XmlHelper.as_security_error(node.GetElement('securityError') ))
             else:
                 self.on_security_data_node(node)
 
@@ -376,7 +376,7 @@ class BbgHistoricalDataRequest(BbgRequest):
         return concat(arr).unstack()
 
 
-class BbgIntrdayBarRequest(BbgRequest):
+class IntrdayBarRequest(Request):
 
     def __init__(self, symbol, interval, start=None, end=None, event='TRADE'):
         """Intraday bar request for bloomberg
@@ -389,7 +389,7 @@ class BbgIntrdayBarRequest(BbgRequest):
         end : end date (if None then use today)
         event : (TRADE,BID,ASK,BEST_BID,BEST_ASK)
         """
-        BbgRequest.__init__(self)
+        Request.__init__(self)
         assert event in ('TRADE', 'BID', 'ASK', 'BEST_BID', 'BEST_ASK')
         assert isinstance(symbol, basestring)
         if start is None:
@@ -422,7 +422,7 @@ class BbgIntrdayBarRequest(BbgRequest):
     def on_event(self, evt, is_final):
         """ this is invoked from in response to COM PumpWaitingMessages - different thread """
         response = self.response
-        for msg in BbgHelper.message_iter(evt):
+        for msg in XmlHelper.message_iter(evt):
             bars = msg.GetElement('barData').GetElement('barTickData')
             for i in range(bars.NumValues):
                 bar = bars.GetValue(i)
@@ -440,7 +440,7 @@ class BbgIntrdayBarRequest(BbgRequest):
             self.response = DataFrame(response, columns=['open', 'high', 'low', 'close', 'volume', 'events'], index=idx)
 
 
-class BbgTerminal(object):
+class Terminal(object):
     @staticmethod
     def execute_request(request):
         session = DispatchWithEvents('blpapicom.ProviderSession.1', ResponseHandler)
@@ -477,47 +477,47 @@ if __name__ == '__main__':
 
 
     banner('ReferenceDataRequest: single security, single field, frame response')
-    req = BbgReferenceDataRequest('msft us equity', 'px_last', response_type='frame')
+    req = ReferenceDataRequest('msft us equity', 'px_last', response_type='frame')
     print req.execute().response
 
     banner('ReferenceDataRequest: single security, single field, map response')
-    req = BbgReferenceDataRequest('msft us equity', 'px_last', response_type='map')
+    req = ReferenceDataRequest('msft us equity', 'px_last', response_type='map')
     print req.execute().response
 
     banner('ReferenceDataRequest: multi-security, multi-field')
-    req = BbgReferenceDataRequest(['eurusd curncy', 'msft us equity'], ['px_open', 'px_last'])
+    req = ReferenceDataRequest(['eurusd curncy', 'msft us equity'], ['px_open', 'px_last'])
     print req.execute().response
 
     banner('ReferenceDataRequest: single security, multi-field (with bulk), frame response')
-    req = BbgReferenceDataRequest('eurusd curncy', ['px_last', 'fwd_curve'])
+    req = ReferenceDataRequest('eurusd curncy', ['px_last', 'fwd_curve'])
     req.execute()
     print req.response
     # DataFrame within a DataFrame
     print req.response.fwd_curve[0].tail()
 
     banner('ReferenceDataRequest: multi security, multi-field, bad field')
-    req = BbgReferenceDataRequest(['eurusd curncy', 'msft us equity'], ['px_last', 'fwd_curve'], ignore_field_error=1)
+    req = ReferenceDataRequest(['eurusd curncy', 'msft us equity'], ['px_last', 'fwd_curve'], ignore_field_error=1)
     req.execute()
     print req.response
 
     banner('HistoricalDataRequest: multi security, multi-field, daily data')
-    req = BbgHistoricalDataRequest(['eurusd curncy', 'msft us equity'], ['px_last', 'px_open'], start=d)
+    req = HistoricalDataRequest(['eurusd curncy', 'msft us equity'], ['px_last', 'px_open'], start=d)
     req.execute()
     print req.response
     print '--------- AS SINGLE TABLE ----------'
     print req.response_as_single()
 
     banner('HistoricalDataRequest: multi security, multi-field, weekly data')
-    req = BbgHistoricalDataRequest(['eurusd curncy', 'msft us equity'], ['px_last', 'px_open'], start=m, period='WEEKLY')
+    req = HistoricalDataRequest(['eurusd curncy', 'msft us equity'], ['px_last', 'px_open'], start=m, period='WEEKLY')
     req.execute()
     print req.response
     print '--------- AS SINGLE TABLE ----------'
     print req.response_as_single()
 
     banner('IntrdayBarRequest: every hour')
-    req = BbgIntrdayBarRequest('eurusd curncy', 60, start=d)
+    req = IntrdayBarRequest('eurusd curncy', 60, start=d)
     req.execute()
-    print req.response
+    print req.response[-10:]
 
     #
     # HOW TO

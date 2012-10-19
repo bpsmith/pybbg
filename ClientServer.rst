@@ -13,9 +13,9 @@ Client
 
 Running from IPython::
 
-> from bbg3 import BbgHistoricalDataRequest
+> from bbg3 import HistoricalDataRequest
 > from service import Client
-> req = BbgHistoricalDataRequest(['msft us equity', 'intc us equity'], ['px_open', 'px_close'])
+> req = HistoricalDataRequest(['msft us equity', 'intc us equity'], ['px_open', 'px_last'])
 > client = Client('http://HOST:PORT')
 > res = client.execute_request(req)
 > print res.response
