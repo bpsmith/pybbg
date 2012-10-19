@@ -18,4 +18,4 @@ Running from IPython::
 > req = BbgHistoricalDataRequest(['msft us equity', 'intc us equity'], ['px_open', 'px_close'])
 > client = Client('http://HOST:PORT')
 > res = client.execute_request(req)
-> print res
+> print res.response
