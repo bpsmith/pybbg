@@ -1,5 +1,5 @@
 """
-Expose the Bloomberg Desktop API as an XML RPC server.
+Expose the Bloomberg Desktop API as an XML RPC server. Useful when running a virtual machine locally.
 """
 from bbg3 import BbgTerminal
 from socket import gethostname
