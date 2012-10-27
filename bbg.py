@@ -5,11 +5,10 @@ Written by Brian P. Smith (brian.p.smith@gmail.com)
 """
 from pythoncom import PumpWaitingMessages
 from win32com.client import DispatchWithEvents, constants, CastTo
-from collections import defaultdict, OrderedDict, namedtuple
+from collections import defaultdict, namedtuple
 from datetime import datetime, timedelta
 from pandas import DataFrame, to_datetime, concat
 import numpy as np
-import pywintypes
 
 SecurityErrorAttrs = ['security', 'source', 'code', 'category', 'message', 'subcategory']
 SecurityError = namedtuple('SecurityError', SecurityErrorAttrs)
@@ -51,12 +50,12 @@ class XmlHelper(object):
         cols = []
         for i in range(node.NumValues):
             row = node.GetValue(i)
-            if i == 0: # Get the ordered cols and assume they are constant
-                cols = [ str(row.GetElement(_).Name) for _ in range(row.NumElements) ]
+            if i == 0:  # Get the ordered cols and assume they are constant
+                cols = [str(row.GetElement(_).Name) for _ in range(row.NumElements)]
 
             for cidx in range(row.NumElements):
                 col = row.GetElement(cidx)
-                data[str(col.Name)].append( XmlHelper.as_value(col) )
+                data[str(col.Name)].append(XmlHelper.as_value(col))
         return DataFrame(data, columns=cols)
 
     @staticmethod
@@ -64,25 +63,25 @@ class XmlHelper(object):
         """ convert the specified element as a python value """
         dtype = ele.Datatype
         #print '%s = %s' % (ele.Name, dtype)
-        if dtype in (1,2,3,4,5,6,7,9,12):
+        if dtype in (1, 2, 3, 4, 5, 6, 7, 9, 12):
             # BOOL, CHAR, BYTE, INT32, INT64, FLOAT32, FLOAT64, BYTEARRAY, DECIMAL)
             return ele.Value
-        elif dtype == 8: # String
+        elif dtype == 8:  # String
             return str(ele.Value)
-        elif dtype == 10: # Date
+        elif dtype == 10:  # Date
             v = ele.Value
             return datetime(year=v.year, month=v.month, day=v.day).date()
-        elif dtype == 11: # Time
+        elif dtype == 11:  # Time
             v = ele.Value
             return datetime(hour=v.hour, minute=v.minute, second=v.second).time()
-        elif dtype == 13: # Datetime
+        elif dtype == 13:  # Datetime
             v = ele.Value
             return datetime(year=v.year, month=v.month, day=v.day, hour=v.hour, minute=v.minute, second=v.second)
-        elif dtype == 14: # Enumeration
-            raise NotImplementError('ENUMERATION data type needs implemented')
-        elif dtype == 16: # Choice
-            raise NotImplementError('CHOICE data type needs implemented')
-        elif dtype == 15: # SEQUENCE
+        elif dtype == 14:  # Enumeration
+            raise NotImplementedError('ENUMERATION data type needs implemented')
+        elif dtype == 16:  # Choice
+            raise NotImplementedError('CHOICE data type needs implemented')
+        elif dtype == 15:  # SEQUENCE
             return XmlHelper.get_sequence_value(ele)
         else:
             raise NotImplementedError('Unexpected data type %s. Check documentation' % dtype)
@@ -90,7 +89,7 @@ class XmlHelper(object):
     @staticmethod
     def get_child_value(parent, name):
         """ return the value of the child element with name in the parent Element """
-        return XmlHelper.as_value( parent.GetElement(name) )
+        return XmlHelper.as_value(parent.GetElement(name))
 
     @staticmethod
     def get_child_values(parent, names):
@@ -98,7 +97,7 @@ class XmlHelper(object):
         vals = []
         for name in names:
             if parent.HasElement(name):
-                vals.append( XmlHelper.as_value( parent.GetElement(name) ))
+                vals.append(XmlHelper.as_value(parent.GetElement(name)))
             else:
                 vals.append(np.nan)
         return vals
@@ -119,7 +118,7 @@ class XmlHelper(object):
         """ convert a fieldExceptions element to a FieldError or FieldError array """
         assert node.Name == 'fieldExceptions'
         if node.IsArray:
-            return [ XmlHelper.as_field_error(node.GetValue(_), secid) for _ in range(node.NumValues) ]
+            return [XmlHelper.as_field_error(node.GetValue(_), secid) for _ in range(node.NumValues)]
         else:
             fld = XmlHelper.get_child_value(node, 'fieldId')
             info = node.GetElement('errorInfo')
@@ -175,7 +174,7 @@ class ResponseHandler(object):
                 self.handler.on_event(evt, is_final=False)
             else:
                 self.handler.on_admin_event(evt)
-        except Exception, e:
+        except Exception:
             import sys
             self.waiting = False
             self.exc_info = sys.exc_info()
@@ -264,8 +263,8 @@ class ReferenceDataRequest(Request):
     def get_bbg_request(self, svc, session):
         # create the bloomberg request object
         request = svc.CreateRequest('ReferenceDataRequest')
-        [ request.GetElement('securities').AppendValue(sec) for sec in self.symbols ]
-        [ request.GetElement('fields').AppendValue(fld) for fld in self.fields ]
+        [request.GetElement('securities').AppendValue(sec) for sec in self.symbols]
+        [request.GetElement('fields').AppendValue(fld) for fld in self.fields]
         Request.apply_overrides(request, self.overrides)
         return request
 
@@ -278,7 +277,7 @@ class ReferenceDataRequest(Request):
             self.response[sid] = fdata
         else:
             self.response['security'].append(sid)
-            [ self.response[f].append(d) for f, d in zip(self.fields, fdata) ]
+            [self.response[f].append(d) for f, d in zip(self.fields, fdata)]
         # Add any field errors if
         ferrors = XmlHelper.get_field_errors(node)
         ferrors and self.field_errors.extend(ferrors)
@@ -286,7 +285,7 @@ class ReferenceDataRequest(Request):
     def on_event(self, evt, is_final):
         """ this is invoked from in response to COM PumpWaitingMessages - different thread """
         for msg in XmlHelper.message_iter(evt):
-            for node, error in XmlHelper.security_iter( msg.GetElement('securityData') ):
+            for node, error in XmlHelper.security_iter(msg.GetElement('securityData')):
                 if error:
                     self.security_errors.append(error)
                 else:
@@ -334,8 +333,8 @@ class HistoricalDataRequest(Request):
     def get_bbg_request(self, svc, session):
         # create the bloomberg request object
         request = svc.CreateRequest('HistoricalDataRequest')
-        [ request.GetElement('securities').AppendValue(sec) for sec in self.symbols ]
-        [ request.GetElement('fields').AppendValue(fld) for fld in self.fields ]
+        [request.GetElement('securities').AppendValue(sec) for sec in self.symbols]
+        [request.GetElement('fields').AppendValue(fld) for fld in self.fields]
         request.Set('startDate', self.start.strftime('%Y%m%d'))
         request.Set('endDate', self.end.strftime('%Y%m%d'))
         request.Set('periodicitySelection', self.period)
@@ -348,7 +347,7 @@ class HistoricalDataRequest(Request):
         dmap = defaultdict(list)
         for i in range(farr.NumValues):
             pt = farr.GetValue(i)
-            [ dmap[f].append(XmlHelper.get_child_value(pt, f)) for f in ['date'] + self.fields]
+            [dmap[f].append(XmlHelper.get_child_value(pt, f)) for f in ['date'] + self.fields]
         idx = dmap.pop('date')
         frame = DataFrame(dmap, columns=self.fields, index=idx)
         frame.index.name = 'date'
@@ -356,12 +355,11 @@ class HistoricalDataRequest(Request):
 
     def on_event(self, evt, is_final):
         """ this is invoked from in response to COM PumpWaitingMessages - different thread """
-        response = self.response
         for msg in XmlHelper.message_iter(evt):
             # Single security element in historical request
             node = msg.GetElement('securityData')
             if node.HasElement('securityError'):
-                self.security_errors.append( XmlHelper.as_security_error(node.GetElement('securityError') ))
+                self.security_errors.append(XmlHelper.as_security_error(node.GetElement('securityError')))
             else:
                 self.on_security_data_node(node)
 
@@ -372,7 +370,7 @@ class HistoricalDataRequest(Request):
             if copy:
                 frame = frame.copy()
             'security' not in frame and frame.insert(0, 'security', sid)
-            arr.append( frame.reset_index().set_index(['date', 'security']) )
+            arr.append(frame.reset_index().set_index(['date', 'security']))
         return concat(arr).unstack()
 
 
@@ -415,8 +413,8 @@ class IntrdayBarRequest(Request):
         request.Set('security', self.symbol)
         request.Set('interval', self.interval)
         request.Set('eventType', self.event)
-        request.Set('startDateTime', session.CreateDatetime(start.year, start.month, start.day, start.hour, start.minute) )
-        request.Set('endDateTime', session.CreateDatetime(end.year, end.month, end.day, end.hour, end.minute) )
+        request.Set('startDateTime', session.CreateDatetime(start.year, start.month, start.day, start.hour, start.minute))
+        request.Set('endDateTime', session.CreateDatetime(end.year, end.month, end.day, end.hour, end.minute))
         return request
 
     def on_event(self, evt, is_final):
@@ -427,13 +425,13 @@ class IntrdayBarRequest(Request):
             for i in range(bars.NumValues):
                 bar = bars.GetValue(i)
                 ts = bar.GetElement(0).Value
-                response['time'].append( datetime(ts.year, ts.month, ts.day, ts.hour, ts.minute) )
-                response['open'].append( bar.GetElement(1).Value )
-                response['high'].append( bar.GetElement(2).Value )
-                response['low'].append( bar.GetElement(3).Value )
-                response['close'].append( bar.GetElement(4).Value )
-                response['volume'].append( bar.GetElement(5).Value )
-                response['events'].append( bar.GetElement(6).Value )
+                response['time'].append(datetime(ts.year, ts.month, ts.day, ts.hour, ts.minute))
+                response['open'].append(bar.GetElement(1).Value)
+                response['high'].append(bar.GetElement(2).Value)
+                response['low'].append(bar.GetElement(3).Value)
+                response['close'].append(bar.GetElement(4).Value)
+                response['volume'].append(bar.GetElement(5).Value)
+                response['events'].append(bar.GetElement(6).Value)
 
         if is_final:
             idx = response.pop('time')
@@ -452,7 +450,7 @@ class Terminal(object):
 
             svc = session.GetService(svcname)
             asbbg = request.get_bbg_request(svc, session)
-            cid = session.SendRequest(asbbg)
+            session.SendRequest(asbbg)
             session.do_init(request)
             while session.waiting:
                 PumpWaitingMessages()
@@ -474,7 +472,6 @@ if __name__ == '__main__':
         print '*' * 25
         print msg
         print '*' * 25
-
 
     banner('ReferenceDataRequest: single security, single field, frame response')
     req = ReferenceDataRequest('msft us equity', 'px_last', response_type='frame')
@@ -525,4 +522,3 @@ if __name__ == '__main__':
     # - Retrieve an fx vol surface:  BbgReferenceDataRequest('eurusd curncy', 'DFLT_VOL_SURF_MID')
     # - Retrieve a fx forward curve:  BbgReferenceDataRequest('eurusd curncy', 'FWD_CURVE')
     # - Retrieve dividends:  BbgReferenceDataRequest('csco us equity', 'BDVD_PR_EX_DTS_DVD_AMTS_W_ANN')
-
