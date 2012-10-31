@@ -15,11 +15,14 @@ SecurityError = namedtuple('SecurityError', SecurityErrorAttrs)
 FieldErrorAttrs = ['security', 'field', 'source', 'code', 'category', 'message', 'subcategory']
 FieldError = namedtuple('FieldError', FieldErrorAttrs)
 
+# poor mans debugging
+DEBUG = False
+
 
 class XmlHelper(object):
 
     @staticmethod
-    def security_iter(nodearr, do_print=0):
+    def security_iter(nodearr):
         """ provide a security data iterator by returning a tuple of (Element, SecurityError) which are mutually exclusive """
         assert nodearr.Name == 'securityData' and nodearr.IsArray
         for i in range(nodearr.NumValues):
@@ -29,12 +32,12 @@ class XmlHelper(object):
             yield result
 
     @staticmethod
-    def message_iter(evt, do_print=0):
+    def message_iter(evt):
         """ provide a message iterator which checks for a response error prior to returning """
         iter = evt.CreateMessageIterator()
         while iter.Next():
             msg = iter.Message
-            if do_print:
+            if DEBUG:
                 print msg.Print
             if msg.AsElement.HasElement('responseError'):
                 raise Exception(msg.AsElement.GetValue('message'))
@@ -70,12 +73,12 @@ class XmlHelper(object):
             return str(ele.Value)
         elif dtype == 10:  # Date
             v = ele.Value
-            return datetime(year=v.year, month=v.month, day=v.day).date()
+            return datetime(year=v.year, month=v.month, day=v.day).date() if v else np.nan
         elif dtype == 11:  # Time
             v = ele.Value
-            return datetime(hour=v.hour, minute=v.minute, second=v.second).time()
+            return datetime(hour=v.hour, minute=v.minute, second=v.second).time() if v else np.nan
         elif dtype == 13:  # Datetime
-            v = ele.Value
+            v = ele.Value if v else np.nan
             return datetime(year=v.year, month=v.month, day=v.day, hour=v.hour, minute=v.minute, second=v.second)
         elif dtype == 14:  # Enumeration
             raise NotImplementedError('ENUMERATION data type needs implemented')
@@ -153,6 +156,14 @@ class XmlHelper(object):
             return None
 
 
+def debug_event(evt):
+    print 'unhandled event: %s' % evt.EventType
+    if evt.EventType in [constants.RESPONSE, constants.PARTIAL_RESPONSE]:
+        print 'messages:'
+        for msg in XmlHelper.message_iter(evt):
+            print msg.Print
+
+
 class ResponseHandler(object):
 
     def do_init(self, handler):
@@ -167,6 +178,9 @@ class ResponseHandler(object):
     def OnProcessEvent(self, evt):
         try:
             evt = CastTo(evt, 'Event')
+            if not self.handler:
+                debug_event(evt)
+
             if evt.EventType == constants.RESPONSE:
                 self.handler.on_event(evt, is_final=True)
                 self.waiting = False
@@ -178,7 +192,6 @@ class ResponseHandler(object):
             import sys
             self.waiting = False
             self.exc_info = sys.exc_info()
-            raise
 
     @property
     def has_deferred_exception(self):
@@ -355,6 +368,7 @@ class HistoricalDataRequest(Request):
 
     def on_event(self, evt, is_final):
         """ this is invoked from in response to COM PumpWaitingMessages - different thread """
+        print 'final message', is_final
         for msg in XmlHelper.message_iter(evt):
             # Single security element in historical request
             node = msg.GetElement('securityData')
