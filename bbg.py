@@ -78,7 +78,7 @@ class XmlHelper(object):
             v = ele.Value
             return datetime(hour=v.hour, minute=v.minute, second=v.second).time() if v else np.nan
         elif dtype == 13:  # Datetime
-            v = ele.Value if v else np.nan
+            v = ele.Value
             return datetime(year=v.year, month=v.month, day=v.day, hour=v.hour, minute=v.minute, second=v.second)
         elif dtype == 14:  # Enumeration
             raise NotImplementedError('ENUMERATION data type needs implemented')
