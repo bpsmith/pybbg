@@ -529,6 +529,10 @@ if __name__ == '__main__':
     print req.response
     print '--------- AS SINGLE TABLE ----------'
     print req.response_as_single()
+    print '--------- AS PANEL (id indexed) ----------'
+    print req.response_as_panel()
+    print '--------- AS PANEL (field indexed) ----------'
+    print req.response_as_panel(swap=1)
 
     banner('IntrdayBarRequest: every hour')
     req = IntrdayBarRequest('eurusd curncy', 60, start=d)
