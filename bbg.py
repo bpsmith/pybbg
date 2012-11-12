@@ -7,7 +7,7 @@ from pythoncom import PumpWaitingMessages
 from win32com.client import DispatchWithEvents, constants, CastTo
 from collections import defaultdict, namedtuple
 from datetime import datetime, timedelta
-from pandas import DataFrame, to_datetime, concat
+from pandas import DataFrame, to_datetime, concat, Panel
 import numpy as np
 
 SecurityErrorAttrs = ['security', 'source', 'code', 'category', 'message', 'subcategory']
@@ -368,7 +368,6 @@ class HistoricalDataRequest(Request):
 
     def on_event(self, evt, is_final):
         """ this is invoked from in response to COM PumpWaitingMessages - different thread """
-        print 'final message', is_final
         for msg in XmlHelper.message_iter(evt):
             # Single security element in historical request
             node = msg.GetElement('securityData')
@@ -386,6 +385,12 @@ class HistoricalDataRequest(Request):
             'security' not in frame and frame.insert(0, 'security', sid)
             arr.append(frame.reset_index().set_index(['date', 'security']))
         return concat(arr).unstack()
+
+    def response_as_panel(self, swap=False):
+        panel = Panel(self.response)
+        if swap:
+            panel = panel.swapaxes('items', 'minor')
+        return panel
 
 
 class IntrdayBarRequest(Request):
