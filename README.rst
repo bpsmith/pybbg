@@ -1,5 +1,8 @@
+Please note this project has moved to `tia <http://github.com/bpsmith/tia`__: collection of utilities
+=====================================================================================================
+
 pybbg - python library to interface with Bloomberg COM API
-=====
+==========================================================
 
 Python interface to Bloomberg Desktop APIs using COM
 
