@@ -1,7 +1,8 @@
 Project has moved
 =================
 
-Please note this project has moved to `tia <http://github.com/bpsmith/tia>`__: collection of utilities
+Please note this project has moved to tia_: 
+.. _tia: https://github.com/bpsmith/tia
 
 
 pybbg - python library to interface with Bloomberg COM API
