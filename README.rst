@@ -1,7 +1,8 @@
 Project has moved
 =================
 
-Please note this project has moved to tia_: 
+Please note this project has moved to tia_
+
 .. _tia: https://github.com/bpsmith/tia
 
 
